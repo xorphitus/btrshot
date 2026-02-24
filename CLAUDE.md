@@ -56,3 +56,46 @@ Failure causes an immediate exit with a descriptive error.
 ## systemd Integration
 
 The daemon uses `Type=notify` (`sd_notify`) to signal readiness after startup validation. It is restarted automatically on crash (`Restart=on-failure`). AWS credentials come from environment variables or `AWS_PROFILE` via `/etc/btrshot/aws.env`.
+
+## Development Workflow
+
+Must follow these steps sequentially.
+
+### 1. Choose a Task
+
+Load @tasks.md and find only one remaining task that doesn't depend on any other tasks.
+
+### 2. Coding
+
+Implement the chosen task using `rust-plugin:coding` subagent to implement the feature following TDD Red-Green-Refactor cycle with idiomatic Rust practices.
+
+### 3. Review & Testing
+
+Run all three of the following subagents to validate the implementation:
+
+- `rust-plugin:code-review` — Review for readability, maintainability, and Rust idioms
+- `rust-plugin:testing` — Run tests, analyze coverage, and identify gaps
+- `rust-plugin:security` — Audit for vulnerabilities and insecure patterns
+
+When one of them fails, restart from #2.
+
+### 4. Performance & Docs (when applicable)
+
+Run these when performance or public API documentation matters:
+
+- `rust-plugin:performance` — Benchmarking, profiling, and optimization guidance
+- `rust-plugin:docs` — Rustdoc quality and doc test coverage
+
+When one of them fails, restart from #2.
+
+### 5. Commit the Change
+
+Commit the change with `jj commit`.
+
+### 6. Mark the Task Done
+
+Modify @tasks.md and mark the task done.
+
+### 7.
+
+Terminate the session.
