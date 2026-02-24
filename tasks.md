@@ -3,7 +3,7 @@
 ## Checklist
 
 - [x] 1. Scaffold the Cargo project
-- [ ] 2. Config parsing (`src/config.rs`)
+- [x] 2. Config parsing (`src/config.rs`)
 - [ ] 3. State management (`src/state.rs`)
 - [ ] 4. Startup validation (`src/validation.rs`)
 - [ ] 5. External command helpers (`src/cmd.rs`)
