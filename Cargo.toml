@@ -2,16 +2,27 @@
 name = "btrshot"
 version = "0.1.0"
 edition = "2021"
+description = "btrfs snapshot backup daemon to local disk and encrypted S3"
+license = "MIT"
+repository = "https://github.com/xorphitus/btrshot"
 
 [[bin]]
 name = "btrshot"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "process", "fs", "io-util"] }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 sd-notify = "0.4"
 anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
