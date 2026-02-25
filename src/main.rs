@@ -2,6 +2,7 @@
 
 mod cmd;
 mod config;
+mod snapshot;
 mod state;
 mod validation;
 

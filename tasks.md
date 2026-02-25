@@ -6,7 +6,7 @@
 - [x] 2. Config parsing (`src/config.rs`)
 - [x] 3. State management (`src/state.rs`)
 - [x] 4. Startup validation (`src/validation.rs`)
-- [ ] 5. External command helpers (`src/cmd.rs`)
+- [x] 5. External command helpers (`src/cmd.rs`)
 - [ ] 6. Snapshot naming utilities (`src/snapshot.rs`)
 - [ ] 7. Full backup (`src/backup/full.rs`)
 - [ ] 8. Incremental backup (`src/backup/incremental.rs`)

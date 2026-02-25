@@ -66,12 +66,7 @@ pub fn pipe(steps: &[(&str, &[&str])]) -> anyhow::Result<()> {
             Stdio::from(prev_stdout)
         };
 
-        let stdout = if index == steps.len() - 1 {
-            // Last step: inherit stdout so output goes to the terminal / caller.
-            Stdio::inherit()
-        } else {
-            Stdio::piped()
-        };
+        let stdout = Stdio::piped();
 
         let child = Command::new(program)
             .args(*args)
@@ -106,6 +101,11 @@ pub fn pipe(steps: &[(&str, &[&str])]) -> anyhow::Result<()> {
             .wait_with_output()
             .with_context(|| format!("failed to wait for '{program}' at pipeline step {index}"))
             .and_then(|output| {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !stdout.trim().is_empty() {
+                    debug!(program, step = index, stdout = %stdout.trim(), "pipeline step stdout");
+                }
+
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 if !stderr.trim().is_empty() {
                     warn!(program, step = index, stderr = %stderr.trim(), "pipeline step stderr");
