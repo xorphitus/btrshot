@@ -312,15 +312,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // validate_backup_fs — error path (non-btrfs temp dir)
+    // validate_backup_fs — error path (non-btrfs path)
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_validate_backup_fs_non_btrfs_path_returns_err() {
-        // tempfile directories are on the host filesystem (typically ext4/tmpfs),
-        // which is not btrfs, so this should return Err.
-        let dir = TempDir::new().expect("temp dir");
-        let result = validate_backup_fs(dir.path());
+        // /proc is always a procfs mount, never btrfs — safe to use even on
+        // systems where the root filesystem is btrfs.
+        let result = validate_backup_fs(Path::new("/proc"));
         assert!(
             result.is_err(),
             "a non-btrfs path should fail validate_backup_fs"
@@ -329,12 +328,10 @@ mod tests {
 
     #[test]
     fn test_validate_backup_fs_error_contains_path() {
-        let dir = TempDir::new().expect("temp dir");
-        let err = validate_backup_fs(dir.path()).expect_err("should be Err");
+        let err = validate_backup_fs(Path::new("/proc")).expect_err("should be Err");
         let msg = format!("{err:#}");
-        let path_str = dir.path().to_string_lossy();
         assert!(
-            msg.contains(path_str.as_ref()),
+            msg.contains("/proc"),
             "error message should mention the path; got: {msg}"
         );
     }
