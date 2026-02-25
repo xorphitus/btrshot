@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 
+mod backup;
 mod cmd;
 mod config;
 mod snapshot;
