@@ -40,8 +40,9 @@
 
 ### #6 Verify AWS_ENDPOINT_URL support in btrshot.sh
 - **Blocked by**: (none)
-- **Status**: pending
+- **Status**: done
 - **Description**: Check whether the `aws` CLI calls in `btrshot.sh` work with `AWS_ENDPOINT_URL` (AWS CLI v2). If not, either patch the script to accept an endpoint override or add a wrapper in the test entrypoint. This must be resolved before tests can pass against MinIO.
+- **Result**: Verified — all five `aws` calls use standard commands with no hardcoded endpoint. AWS CLI v2 respects `AWS_ENDPOINT_URL` natively. No script changes required; the test entrypoint only needs `export AWS_ENDPOINT_URL=http://localhost:9000`.
 
 ### #7 End-to-end validation — run the full test suite
 - **Blocked by**: #5, #6
