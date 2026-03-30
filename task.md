@@ -15,7 +15,7 @@
 
 ### #1 Create test/helpers.sh — assertion utilities
 - **Blocked by**: (none)
-- **Status**: pending
+- **Status**: done
 - **Description**: Implement the assertion helper functions (`assert_eq`, `assert_ne`, `assert_file_exists`, `assert_dir_exists`, `assert_contains`, `assert_exit_code`, `fail`) as defined in DESIGN.md. This is a leaf dependency with no prerequisites.
 
 ### #2 Create test/test_cases.sh — test case functions T1–T10
