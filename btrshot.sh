@@ -67,22 +67,23 @@ log_error() { echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') [ERROR] $*" >&2; }
 write_state() {
     local status="$1"   # idle | in_progress
     local operation="${2:-}"  # full | incremental | s3_upload | (empty for idle)
+    local detail="${3:-}"    # extra info (e.g. snapshot name for s3_upload)
     local ts
     ts=$(date -u '+%s')
-    echo "${status}:${operation}:${ts}" > "$STATE_DIR/state"
+    echo "${status}:${operation}:${ts}:${detail}" > "$STATE_DIR/state"
 }
 
 read_state() {
-    # Outputs: status operation timestamp
+    # Outputs: status operation timestamp detail
     if [[ ! -f "$STATE_DIR/state" ]]; then
-        echo "idle  $(date -u '+%s')"
+        echo "idle  $(date -u '+%s') "
         return
     fi
     local raw
     raw=$(cat "$STATE_DIR/state")
-    local status operation ts
-    IFS=':' read -r status operation ts <<< "$raw"
-    echo "$status $operation $ts"
+    local status operation ts detail
+    IFS=':' read -r status operation ts detail <<< "$raw"
+    echo "$status $operation $ts $detail"
 }
 
 read_timestamp() {
@@ -148,7 +149,7 @@ validate_backup_fs() {
 run_s3_upload() {
     local snapshot_name="$1"
     log_info "S3 upload start: $snapshot_name"
-    write_state "in_progress" "s3_upload"
+    write_state "in_progress" "s3_upload" "$snapshot_name"
 
     tar -cf - -C "$SNAPSHOTS_DIR" "$snapshot_name/" \
         | gpg --encrypt --recipient-file "$GPG_PUBLIC_KEY_FILE" \
@@ -249,6 +250,9 @@ run_incremental_backup() {
     btrfs subvolume delete "$SNAP_BASE"
     mv "$SNAP_TMP" "$SNAP_BASE"
 
+    # 5. S3 upload
+    run_s3_upload "$snap_name"
+
     write_timestamp "incremental"
     write_state "idle"
     log_info "Incremental backup complete: $snap_name"
@@ -258,11 +262,17 @@ run_incremental_backup() {
 # Interruption recovery
 # ---------------------------------------------------------------------------
 
+parse_s3_bucket() {
+    # Extract bare bucket name from S3_BUCKET (which may contain a prefix)
+    echo "${S3_BUCKET%%/*}"
+}
+
 recover_if_needed() {
-    local state_info status operation
+    local state_info status operation detail
     state_info=$(read_state)
     status=$(echo "$state_info" | awk '{print $1}')
     operation=$(echo "$state_info" | awk '{print $2}')
+    detail=$(echo "$state_info" | awk '{print $4}')
 
     if [[ "$status" != "in_progress" ]]; then
         return
@@ -283,18 +293,32 @@ recover_if_needed() {
             ;;
         s3_upload)
             # Abort incomplete multipart uploads
+            local bucket_name
+            bucket_name=$(parse_s3_bucket)
             local uploads
-            uploads=$(aws s3api list-multipart-uploads --bucket "$S3_BUCKET" \
+            uploads=$(aws s3api list-multipart-uploads --bucket "$bucket_name" \
                 --query 'Uploads[].[UploadId,Key]' --output text 2>/dev/null || true)
             if [[ -n "$uploads" ]]; then
                 while IFS=$'\t' read -r upload_id key; do
                     [[ -z "$upload_id" ]] && continue
                     log_info "Aborting multipart upload: $key ($upload_id)"
                     aws s3api abort-multipart-upload \
-                        --bucket "$S3_BUCKET" \
+                        --bucket "$bucket_name" \
                         --key "$key" \
                         --upload-id "$upload_id" || true
                 done <<< "$uploads"
+            fi
+            # Retry the interrupted S3 upload
+            if [[ -n "$detail" && -d "$SNAPSHOTS_DIR/$detail" ]]; then
+                write_state "idle"
+                log_info "Retrying S3 upload for: $detail"
+                run_s3_upload "$detail"
+                # Update the appropriate timestamp since the backup is now complete
+                if [[ "$detail" == full_* ]]; then
+                    write_timestamp "full"
+                elif [[ "$detail" == incr_* ]]; then
+                    write_timestamp "incremental"
+                fi
             fi
             ;;
     esac
