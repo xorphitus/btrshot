@@ -111,7 +111,8 @@ The systemd timer replaces an internal sleep loop. Each timer tick launches `btr
 └── aws.env                     # AWS credentials (optional)
 
 /usr/local/bin/
-└── btrshot.sh                  # Main backup script
+├── btrshot.sh                  # Main backup script
+└── btrshot-restore.sh          # Restore utility
 
 /var/lib/btrshot/               # State directory
 ├── state                       # Current operation state (for interruption detection)
@@ -140,7 +141,7 @@ SOURCE_PATH="/path/to/A"
 SOURCE_SUBVOLUME="data"
 BACKUP_PATH="/path/to/B"
 
-S3_BUCKET="s3://your-bucket-name/backups"
+S3_BUCKET="your-bucket-name"
 S3_RETENTION_COUNT=10
 # AWS_PROFILE="backup-profile"   # optional; omit to use instance role or env vars
 
@@ -220,7 +221,7 @@ Nothing to do, exit 0
    ```
 4. Rename received snapshot with timestamp
 5. Update `current` symlink
-6. Delete old snapshots from B (keep only current full + its incrementals)
+6. Delete all old snapshots from B (keep only the new full)
 7. On Disk A, keep the read-only snapshot as the new incremental base (rename to `/path/to/A/.snap_base_full`)
 8. Trigger S3 upload process for the new full snapshot
 9. Only after S3 upload succeeds, update `last_full_backup` timestamp
@@ -237,12 +238,13 @@ Nothing to do, exit 0
    ```
 4. Rename received snapshot with timestamp
 5. Delete old base snapshot on A, rename `.snap_tmp` to become the new base parent for the next incremental
-6. Update `last_incremental_backup` timestamp
-7. Write state: `idle`
+6. Trigger S3 upload process for the new incremental snapshot
+7. Only after S3 upload succeeds, update `last_incremental_backup` timestamp
+8. Write state: `idle`
 
 ### S3 Upload Process
 
-1. Write state: `in_progress:s3_upload`
+1. Write state: `in_progress:s3_upload:<ts>:<snapshot_name>`
 2. Stream-upload one snapshot at a time (no bundling)
    ```bash
    tar -cf - -C /path/to/B/snapshots full_YYYYMMDD_HHMMSS/ | \
@@ -268,14 +270,16 @@ Notes:
 ### State File Format
 
 ```
-<status>:<operation>:<timestamp>
+<status>:<operation>:<timestamp>:<detail>
 ```
 
+The `detail` field is optional and carries extra context for recovery (e.g. the snapshot name during an S3 upload).
+
 Examples:
-- `idle::1706000000`
-- `in_progress:full:1706000000`
-- `in_progress:incremental:1706000000`
-- `in_progress:s3_upload:1706000000`
+- `idle:::1706000000`
+- `in_progress:full:1706000000:`
+- `in_progress:incremental:1706000000:`
+- `in_progress:s3_upload:1706000000:full_20260301_120000`
 
 ### Cleanup on Interruption Detection
 
@@ -357,6 +361,7 @@ systemctl enable --now btrshot.timer
 | File | Description |
 |------|-------------|
 | `/usr/local/bin/btrshot.sh` | Main backup script |
+| `/usr/local/bin/btrshot-restore.sh` | Restore utility (download, decrypt, extract from S3) |
 | `/etc/btrshot/btrshot.conf` | Configuration file |
 | `/etc/btrshot/aws.env` | AWS credentials environment file (optional) |
 | `/etc/systemd/system/btrshot.service` | systemd oneshot service unit |
@@ -381,11 +386,13 @@ systemctl enable --now btrshot.timer
 
 ## Recovery Procedure
 
-To restore files from S3:
+Use `btrshot-restore.sh` for automated recovery from S3. See the [Restore Utility](#restore-utility) section below.
+
+For manual recovery:
 
 1. Download encrypted backup
    ```bash
-   aws s3 cp s3://bucket/snapshots/full_YYYYMMDD_HHMMSS.tar.gpg ./
+   aws s3 cp s3://bucket/full_YYYYMMDD_HHMMSS.tar.gpg ./
    ```
 
 2. Decrypt with private key
@@ -406,11 +413,59 @@ btrfs subvolume create /path/to/target_subvol
 rsync -aHAX /path/to/restore/full_YYYYMMDD_HHMMSS/ /path/to/target_subvol/
 ```
 
+## Restore Utility
+
+`btrshot-restore.sh` automates S3 backup recovery: download, decrypt, extract, and optionally restore into a btrfs subvolume.
+
+### Usage
+
+```
+btrshot-restore.sh [OPTIONS] [BACKUP_NAME | "latest"]
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--list` | List available backups in S3 and exit |
+| `--output-dir DIR` | Directory to extract backup into (required unless `--list`) |
+| `--gpg-key FILE` | Path to GPG private key file; imported before decryption (optional; uses default keyring if omitted) |
+| `--btrfs-subvol PATH` | Create a btrfs subvolume at PATH and rsync restored data into it |
+| `--keep-intermediates` | Keep `.tar.gpg` and `.tar` files in the output directory after extraction |
+| `--config FILE` | Override config file path (default: `/etc/btrshot/btrshot.conf`) |
+
+### Backup Name Resolution
+
+The positional argument selects which backup to restore:
+
+- **Explicit name**: `full_20260301_120000` (`.tar.gpg` suffix optional)
+- **`latest`**: Resolves to the most recent backup by embedded timestamp (`YYYYMMDD_HHMMSS`), sorted with `sort -t_ -k2,3`
+
+### Prerequisites
+
+Requires `aws`, `gpg`, and `tar`. When `--btrfs-subvol` is used, `btrfs` and `rsync` are also required. The script checks for missing commands at startup.
+
+### Examples
+
+```bash
+# List available backups
+btrshot-restore.sh --list
+
+# Restore the latest backup
+btrshot-restore.sh latest --output-dir /mnt/restore
+
+# Restore a specific backup with a custom GPG key
+btrshot-restore.sh full_20260301_120000 --output-dir /mnt/restore --gpg-key key.asc
+
+# Restore into a btrfs subvolume
+btrshot-restore.sh latest --output-dir /mnt/restore --btrfs-subvol /mnt/data/restored
+```
+
 ## Automated Testing
 
 ### Overview
 
-Integration tests run inside a Docker container to provide an isolated environment with real btrfs filesystems and a local S3-compatible endpoint (MinIO). This avoids polluting the host and allows safe use of privileged btrfs operations.
+Integration tests run inside Docker containers (via Docker Compose) to provide an isolated environment with real btrfs filesystems and a local S3-compatible endpoint (floci). This avoids polluting the host and allows safe use of privileged btrfs operations.
 
 ### Container Requirements
 
@@ -421,27 +476,31 @@ The Docker image must include:
 | `btrfs-progs` | `btrfs subvolume`, `btrfs send/receive` |
 | `gnupg` | GPG encryption |
 | `awscli` (v2) | S3 upload/download/retention |
-| `minio` | Local S3-compatible object store |
 | `util-linux` | `losetup`, `mount` |
 | `coreutils`, `bash` | Script runtime |
 | `tar` | Archive creation |
+
+A separate floci container (`hectorvent/floci:latest`) provides the S3-compatible endpoint.
 
 ### Container Setup
 
 The test harness script (`test/run.sh`) performs:
 
-1. **Build image** — Build (or reuse cached) the Docker image from `test/Dockerfile`.
+1. **Build and launch** — Uses `docker compose` with `test/docker-compose.yml` to build the test image and start two services:
+   - **floci** — S3-compatible endpoint (`hectorvent/floci:latest`).
+   - **test** — Privileged container that runs the test suite. Depends on `floci`.
 
-2. **Launch container** — Run the container with `--privileged` for btrfs and loopback device access:
    ```bash
-   docker run --rm --privileged \
-       -v "$PROJECT_DIR:/opt/btrshot:ro" \
-       btrshot-test
+   docker compose -f test/docker-compose.yml up \
+       --build --abort-on-container-exit --exit-code-from test
    ```
    - `--privileged` — required for btrfs subvolume operations, mounting loopback devices, and creating filesystems.
-   - `-v ... :ro` — mounts the project directory read-only so the container can access the script and test code.
+   - The project directory is mounted read-only (`..:/opt/btrshot:ro`).
+   - `AWS_ENDPOINT_URL=http://floci:4566` is injected via docker-compose environment.
 
-3. **Exit code** — The container's exit code is propagated as the test suite result.
+2. **Tear down** — `docker compose down --volumes` cleans up after the run.
+
+3. **Exit code** — The test container's exit code is propagated as the test suite result.
 
 ### Test Environment Initialization
 
@@ -462,9 +521,9 @@ Inside the container, `test/entrypoint.sh` sets up the sandbox:
    gpg --batch --gen-key ...
    gpg --export "btrshot-test" > /tmp/test.gpg
 
-4. Start MinIO in the background on localhost:9000
-   minio server /tmp/minio-data &
-   aws --endpoint-url http://localhost:9000 s3 mb s3://btrshot-test
+4. Wait for floci (S3-compatible server) and create the bucket
+   # AWS_ENDPOINT_URL is passed in via docker-compose environment
+   aws s3 mb s3://btrshot-test
 
 5. Write test config (/tmp/btrshot-test.conf)
    SOURCE_PATH=/mnt/A
@@ -477,10 +536,10 @@ Inside the container, `test/entrypoint.sh` sets up the sandbox:
    INCREMENTAL_INTERVAL=86400
    STATE_DIR=/tmp/btrshot-state
 
-6. Export AWS environment for MinIO
-   AWS_ACCESS_KEY_ID=minioadmin
-   AWS_SECRET_ACCESS_KEY=minioadmin
-   AWS_ENDPOINT_URL=http://localhost:9000
+6. Export AWS environment for floci
+   AWS_ACCESS_KEY_ID=test
+   AWS_SECRET_ACCESS_KEY=test
+   # AWS_ENDPOINT_URL=http://floci:4566 (from docker-compose)
 ```
 
 ### Test Cases
@@ -499,7 +558,7 @@ Each test case is a Bash function in `test/test_cases.sh`. The harness runs them
   - `.snap_base_full` exists on A (retained for future incrementals).
   - `last_full_backup` timestamp file exists and contains a recent epoch.
   - State file reads `idle`.
-  - A `.tar.gpg` object exists in MinIO bucket.
+  - A `.tar.gpg` object exists in S3 bucket.
 
 #### T2: Incremental backup after full
 
@@ -510,7 +569,7 @@ Each test case is a Bash function in `test/test_cases.sh`. The harness runs them
   - `file2.txt` is present in the incremental snapshot.
   - `.snap_base_full` on A has been rotated (different inode/generation from T1).
   - `last_incremental_backup` timestamp updated.
-  - A second `.tar.gpg` object exists in MinIO.
+  - A second `.tar.gpg` object exists in S3.
 
 #### T3: Skip when no backup needed
 
@@ -551,10 +610,10 @@ Each test case is a Bash function in `test/test_cases.sh`. The harness runs them
 
 #### T7: S3 retention enforcement
 
-- **Precondition**: Upload 11+ objects to the MinIO bucket (mock old backups).
+- **Precondition**: Upload 11+ objects to the S3 bucket (mock old backups).
 - **Action**: Run a full backup (which triggers `run_s3_upload` with retention logic).
 - **Assertions**:
-  - Total object count in MinIO bucket <= `S3_RETENTION_COUNT`.
+  - Total object count in S3 bucket <= `S3_RETENTION_COUNT`.
   - Oldest objects were deleted, newest retained.
 
 #### T8: Config validation — missing required variable
@@ -586,7 +645,8 @@ Each test case is a Bash function in `test/test_cases.sh`. The harness runs them
 
 ```
 test/
-├── run.sh              # Host-side entry point: builds image, launches Docker container
+├── run.sh              # Host-side entry point: docker compose up/down
+├── docker-compose.yml  # Two-service setup: floci (S3) + privileged test container
 ├── Dockerfile          # Docker image with all required packages
 ├── entrypoint.sh       # Container-side: env setup, runs test cases, reports results
 ├── test_cases.sh       # Test case functions (T1–T10)
@@ -617,4 +677,4 @@ The harness prints each test name and its pass/fail status, then exits non-zero 
 
 ### AWS Endpoint Compatibility
 
-The script's `aws s3 cp` and `aws s3 ls` commands must reach MinIO inside the container. The AWS CLI respects `AWS_ENDPOINT_URL` (v2) or the `--endpoint-url` flag. The test config exports `AWS_ENDPOINT_URL=http://localhost:9000` so no script modifications are needed when using AWS CLI v2. If using AWS CLI v1, the entrypoint must configure an alias or wrapper that injects `--endpoint-url`.
+The script's `aws s3 cp` and `aws s3 ls` commands must reach floci inside the container. The AWS CLI respects `AWS_ENDPOINT_URL` (v2) or the `--endpoint-url` flag. The docker-compose environment sets `AWS_ENDPOINT_URL=http://floci:4566` so no script modifications are needed when using AWS CLI v2. If using AWS CLI v1, the entrypoint must configure an alias or wrapper that injects `--endpoint-url`.
