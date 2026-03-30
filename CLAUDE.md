@@ -17,10 +17,12 @@ The previous Rust implementation was abandoned (see git history). The project is
 | File | Purpose |
 |------|---------|
 | `btrshot.sh` | Main script — the entire implementation |
+| `btrshot-restore.sh` | Restore utility — download, decrypt, extract backups from S3 |
 | `DESIGN.md` | Complete specification; authoritative reference for behavior |
 | `btrshot.conf.example` | Documented configuration template |
 | `btrshot.service` | systemd oneshot service unit |
 | `btrshot.timer` | systemd timer unit (every 2h) |
+| `test/` | Docker-based integration test suite |
 
 ## Architecture
 
@@ -53,6 +55,6 @@ Optional (have defaults): `FULL_BACKUP_INTERVAL` (604800), `INCREMENTAL_INTERVAL
 
 ## Development Notes
 
-- No build system; no automated test suite. Integration testing requires two btrfs filesystems (loopback devices work).
-- The script uses `set -euo pipefail`. All functions are designed to be atomic where possible.
+- No build system. The script uses `set -euo pipefail`. All functions are designed to be atomic where possible.
+- Integration tests run via `test/run.sh` using Docker Compose with loopback btrfs filesystems and floci (S3 emulator). 10 test cases cover full/incremental backup, recovery, retention, and validation.
 - Refer to DESIGN.md for the recovery procedure and the systemd unit templates before modifying the script.
