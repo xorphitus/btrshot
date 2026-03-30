@@ -25,7 +25,7 @@
 
 ### #3 Create test/entrypoint.sh — container-side env setup and test runner
 - **Blocked by**: #2
-- **Status**: pending
+- **Status**: done
 - **Description**: Implement the container entrypoint that: (1) creates two loopback btrfs images and mounts them, (2) creates the source subvolume with seed data, (3) generates a throwaway GPG key, (4) starts MinIO in the background and creates the bucket, (5) writes the test config and exports AWS env vars, (6) sources test_cases.sh and runs each test sequentially with state reset between tests, (7) reports pass/fail summary and exits with appropriate code.
 
 ### #4 Create test/nspawn-rootfs.nix — Nix expression for container rootfs
