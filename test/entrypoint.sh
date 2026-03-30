@@ -92,7 +92,7 @@ export S3_BUCKET=btrshot-test
 export GPG_PUBLIC_KEY_FILE=/tmp/test.gpg
 
 # ---------------------------------------------------------------------------
-# 8. Source helpers and test cases, then run each test
+# 7. Source helpers and test cases, then run each test
 # ---------------------------------------------------------------------------
 # shellcheck source=helpers.sh
 source "$SCRIPT_DIR/helpers.sh"

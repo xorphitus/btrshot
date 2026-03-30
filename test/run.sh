@@ -41,6 +41,7 @@ done
 echo "Launching systemd-nspawn container..."
 exec systemd-nspawn \
     --directory="$ROOTFS" \
+    --volatile=overlay \
     --bind-ro="$PROJECT_DIR:/opt/btrshot" \
     --bind-ro=/nix/store \
     --capability=CAP_SYS_ADMIN \
