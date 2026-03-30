@@ -1,0 +1,13 @@
+[Unit]
+Description=btrshot backup (btrfs snapshot to local + S3)
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsMountPoint=/path/to/A
+ConditionPathIsMountPoint=/path/to/B
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/btrshot.sh
+StandardOutput=journal
+StandardError=journal
+EnvironmentFile=-/etc/btrshot/aws.env

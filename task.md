@@ -3,16 +3,16 @@
 ## Checklist
 
 - [x] 1. Project scaffolding and configuration
-- [ ] 2. State management functions
-- [ ] 3. Startup validation
-- [ ] 4. Snapshot naming utilities
-- [ ] 5. Full backup
-- [ ] 6. Incremental backup
-- [ ] 7. S3 upload (encrypt + upload + retention)
-- [ ] 8. Interruption recovery
-- [ ] 9. Backup decision logic (main entry point)
-- [ ] 10. Logging
-- [ ] 11. systemd units (timer + service)
+- [x] 2. State management functions
+- [x] 3. Startup validation
+- [x] 4. Snapshot naming utilities
+- [x] 5. Full backup
+- [x] 6. Incremental backup
+- [x] 7. S3 upload (encrypt + upload + retention)
+- [x] 8. Interruption recovery
+- [x] 9. Backup decision logic (main entry point)
+- [x] 10. Logging
+- [x] 11. systemd units (timer + service)
 - [ ] 12. Example config file
 - [ ] 13. Integration smoke test (optional, manual)
 

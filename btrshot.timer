@@ -1,0 +1,10 @@
+[Unit]
+Description=btrshot backup timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2h
+Unit=btrshot.service
+
+[Install]
+WantedBy=timers.target
