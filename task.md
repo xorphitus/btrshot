@@ -35,8 +35,8 @@
 
 ### #5 Create test/run.sh — host-side entry point
 - **Blocked by**: #3, #4
-- **Status**: pending
-- **Description**: Implement the host-side script that: (1) builds (or reuses cached) rootfs via nspawn-rootfs.nix, (2) launches systemd-nspawn with the correct flags (`--capability=CAP_SYS_ADMIN`, `--bind-ro` for project dir, `--property=DeviceAllow`, `--bind=/dev/loop-control`), (3) propagates the container exit code.
+- **Status**: done
+- **Description**: Implement the host-side script that: (1) builds (or reuses cached) rootfs via nspawn-rootfs.nix, (2) launches systemd-nspawn with the correct flags (`--capability=CAP_SYS_ADMIN`, `--bind-ro` for project dir, `--property=DeviceAllow`, `--bind=/dev/loop-control`, `--bind=/dev/loopN`), (3) propagates the container exit code.
 
 ### #6 Verify AWS_ENDPOINT_URL support in btrshot.sh
 - **Blocked by**: (none)
