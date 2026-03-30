@@ -16,7 +16,7 @@ A btrfs-based backup system that performs incremental backups from disk A to dis
 | Local retention | Latest full backup + incremental snapshots since then |
 | S3 retention | 10 most recent offsite snapshot objects (uploaded separately) |
 | Encryption | GPG (asymmetric, public key) |
-| Implementation | Rust (long-running daemon) |
+| Implementation | Bash (systemd timer) |
 
 ## Prerequisites
 
@@ -56,12 +56,12 @@ Disk B must also be a btrfs filesystem to receive snapshots via `btrfs receive`.
 
 ### Validation
 
-The daemon validates these prerequisites at startup before entering the scheduler loop:
+The script validates these prerequisites at startup before proceeding:
 
 1. Source data path is a btrfs subvolume (via `btrfs subvolume show`)
 2. Disk B is a btrfs filesystem
 
-If validation fails, the daemon exits with an error message explaining the issue.
+If validation fails, the script exits with an error message explaining the issue.
 
 ### Source Snapshot Retention
 
@@ -73,18 +73,23 @@ Disk A keeps a single read-only base snapshot (`.snap_base_full`) after each ful
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                   systemd service (daemon)                      │
+│                   btrshot.timer (systemd timer)                 │
+│  OnBootSec=5min, OnUnitActiveSec=2h                             │
+└─────────────────────────────────────────────────────────────────┘
+                                 │ fires
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│             btrshot.service (Type=oneshot)                      │
+│             ExecStart=/usr/local/bin/btrshot.sh                 │
 └─────────────────────────────────────────────────────────────────┘
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    btrshot (Rust daemon)                        │
-│  - Internal scheduler loop (tokio async runtime)                │
-│  - Check last backup timestamps every CHECK_INTERVAL            │
-│  - Determine action (full/incremental/none)                     │
-│  - Execute backup via external commands                         │
-│  - Handle interruption recovery                                 │
-│  - Graceful shutdown on SIGTERM/SIGINT                          │
+│                         btrshot.sh                              │
+│  - Validate prerequisites                                       │
+│  - Recover from interrupted previous run (state file)           │
+│  - Determine action (full / incremental / none)                 │
+│  - Execute backup via btrfs, gpg, aws CLI                       │
 └─────────────────────────────────────────────────────────────────┘
                                  │
               ┌──────────────────┼──────────────────┐
@@ -96,28 +101,22 @@ Disk A keeps a single read-only base snapshot (`.snap_base_full`) after each ful
               btrfs send/receive      GPG + aws s3 cp
 ```
 
-The daemon replaces both the systemd timer and the oneshot script. It manages its own schedule using `tokio::time` and runs indefinitely until signalled to stop.
-
-### Rust Crate Overview
-
-| Crate | Purpose |
-|-------|---------|
-| `tokio` | Async runtime, internal timer (`tokio::time::interval`) |
-| `serde` + `toml` | Config file parsing |
-| `tracing` + `tracing-subscriber` | Structured logging (journald-compatible) |
-| `tokio::signal` | SIGTERM/SIGINT handling for graceful shutdown |
-| `std::process::Command` | Spawn external processes (`btrfs`, `gpg`, `aws`) |
+The systemd timer replaces an internal sleep loop. Each timer tick launches `btrshot.sh` as a short-lived oneshot process that decides what (if anything) to back up, performs the work, then exits.
 
 ### Directory Structure
 
 ```
 /etc/btrshot/
-└── config.toml                 # Configuration file
+├── btrshot.conf                # Configuration file (bash-sourceable)
+└── aws.env                     # AWS credentials (optional)
+
+/usr/local/bin/
+└── btrshot.sh                  # Main backup script
 
 /var/lib/btrshot/               # State directory
 ├── state                       # Current operation state (for interruption detection)
-├── last_full_backup            # Timestamp of last full backup
-└── last_incremental_backup     # Timestamp of last incremental backup
+├── last_full_backup            # Timestamp of last full backup (Unix epoch)
+└── last_incremental_backup     # Timestamp of last incremental backup (Unix epoch)
 
 Disk A (source):
 /path/to/A/
@@ -134,61 +133,60 @@ Disk B (backup destination):
 
 ## Configuration
 
-Configuration file: `/etc/btrshot/config.toml`
+Configuration file: `/etc/btrshot/btrshot.conf` (sourced by the script)
 
-```toml
-[paths]
-source_path = "/path/to/A"
-source_subvolume = "data"
-backup_path = "/path/to/B"
+```bash
+SOURCE_PATH="/path/to/A"
+SOURCE_SUBVOLUME="data"
+BACKUP_PATH="/path/to/B"
 
-[s3]
-bucket = "s3://your-bucket-name/backups"
-retention_count = 10
-# aws_profile = "backup-profile"   # optional; omit to use instance role or env vars
+S3_BUCKET="s3://your-bucket-name/backups"
+S3_RETENTION_COUNT=10
+# AWS_PROFILE="backup-profile"   # optional; omit to use instance role or env vars
 
-[gpg]
-public_key_file = "/path/to/backup-key.pub"
+GPG_PUBLIC_KEY_FILE="/path/to/backup-key.pub"
 
-[schedule]
-# How often the daemon wakes up to check if a backup is due (in seconds)
-check_interval = 7200          # 2 hours
-full_backup_interval = 604800  # 7 days
-incremental_interval = 86400   # 24 hours
+FULL_BACKUP_INTERVAL=604800   # 7 days in seconds
+INCREMENTAL_INTERVAL=86400    # 24 hours in seconds
 
-[state]
-state_dir = "/var/lib/btrshot"
+STATE_DIR="/var/lib/btrshot"
 ```
+
+The timer interval (`OnUnitActiveSec=` in `btrshot.timer`) is the check frequency and is configured in the systemd unit, not in `btrshot.conf`.
 
 AWS credentials are read from environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) or `AWS_PROFILE` at runtime, consistent with standard AWS SDK conventions.
 
-## Daemon Scheduler Loop
+## Timer-based Execution
 
-The daemon runs a single async loop on a `tokio` runtime:
+The systemd timer fires `btrshot.service` periodically (default every 2 hours). Each invocation runs `btrshot.sh` end-to-end:
 
 ```
-Startup
+Timer fires
   │
   ▼
-Validate prerequisites (btrfs subvolumes, mounts)
+btrshot.sh starts
   │
   ▼
-┌─────────────────────────────────────────────────────┐
-│  tokio::select! {                                   │
-│    _ = check_interval.tick() => { run_check() }     │
-│    _ = shutdown_signal => { graceful_shutdown() }   │
-│  }                                                  │
-└─────────────────────────────────────────────────────┘
+Source config, validate prerequisites
+  │
+  ▼
+Recover from interrupted previous run (if state ≠ idle)
+  │
+  ▼
+Decision: full / incremental / nothing
+  │
+  ▼
+Execute backup, update state file, exit 0
 ```
 
-`run_check()` is called every `check_interval` (default 2 h) and performs the backup decision logic. The interval fires immediately on the first tick so a backup is evaluated at startup.
+The script exits with a non-zero code on unrecoverable failure, which systemd records in the journal.
 
 ## Backup Process
 
 ### Decision Flow
 
 ```
-run_check()
+btrshot.sh
   │
   ▼
 Check state file
@@ -206,7 +204,7 @@ Check last_incremental_backup timestamp
   ├─ >= 24 hours ago ──► Execute INCREMENTAL backup
   │
   ▼
-Nothing to do, sleep until next tick
+Nothing to do, exit 0
 ```
 
 ### Full Backup Process
@@ -245,42 +243,27 @@ Nothing to do, sleep until next tick
 ### S3 Upload Process
 
 1. Write state: `in_progress:s3_upload`
-2. Create tar stream for one snapshot at a time (full or incremental; no bundling)
+2. Stream-upload one snapshot at a time (no bundling)
    ```bash
-   tar -cf - -C /path/to/B/snapshots full_YYYYMMDD_HHMMSS/
+   tar -cf - -C /path/to/B/snapshots full_YYYYMMDD_HHMMSS/ | \
+       gpg --encrypt --recipient-file /path/to/key.pub | \
+       aws s3 cp - s3://bucket/snapshots/full_YYYYMMDD_HHMMSS.tar.gpg
    ```
-3. Encrypt with GPG
-   ```bash
-   gpg --encrypt --recipient-file /path/to/key.pub
-   ```
-4. Upload to S3
-   ```bash
-   tar ... | gpg ... | aws s3 cp - s3://bucket/snapshots/full_YYYYMMDD_HHMMSS.tar.gpg
-   ```
-5. Upload incremental snapshots as separate objects:
+3. Upload incremental snapshots as separate objects:
    ```bash
    tar -cf - -C /path/to/B/snapshots incr_YYYYMMDD_HHMMSS/ | \
        gpg --encrypt --recipient-file /path/to/key.pub | \
        aws s3 cp - s3://bucket/snapshots/incr_YYYYMMDD_HHMMSS.tar.gpg
    ```
-6. Delete old backups from S3 (keep latest 10 uploaded snapshot objects)
-7. Write state: `idle`
+4. Delete old backups from S3 (keep latest 10 uploaded snapshot objects)
+5. Write state: `idle`
 
 Notes:
 - Offsite uploads are intentionally not bundled for operational simplicity.
 - A full backup run is considered successful only after both local backup and required S3 upload finish successfully.
-- External processes (`btrfs`, `gpg`, `aws`) are spawned via `std::process::Command` with piped stdio to chain streams without buffering to disk.
+- External processes (`btrfs`, `gpg`, `aws`) are chained via bash pipes.
 
 ## Interruption Handling
-
-### Graceful Shutdown
-
-On SIGTERM or SIGINT, the daemon:
-1. Stops accepting new scheduler ticks
-2. Waits for any in-flight backup operation to finish its current step (or times out and marks state as interrupted)
-3. Exits cleanly
-
-systemd sends SIGTERM on `systemctl stop btrshot`, so in-progress backups complete before shutdown when possible.
 
 ### State File Format
 
@@ -296,7 +279,9 @@ Examples:
 
 ### Cleanup on Interruption Detection
 
-When the daemon starts (or after an unclean shutdown) and finds `in_progress` state:
+Since each run is a oneshot, finding `in_progress` state at script startup means the previous run was killed mid-operation (e.g., host shutdown, OOM kill, or manual `systemctl stop`).
+
+When `btrshot.sh` starts and finds `in_progress` state:
 
 1. **Full backup interrupted**:
    - Delete incomplete snapshot on B (if exists)
@@ -317,12 +302,7 @@ When the daemon starts (or after an unclean shutdown) and finds `in_progress` st
 
 ## Logging
 
-The daemon logs via the `tracing` crate to stdout/stderr, captured by the systemd journal. The `tracing-subscriber` is configured to emit plain-text lines with level prefixes compatible with journald level detection.
-
-Log levels:
-- `INFO` - Normal operation and scheduler ticks
-- `WARN` - Recoverable issues
-- `ERROR` - Failures requiring attention
+The script writes log messages to stdout/stderr, which are captured by the systemd journal via the service unit (`StandardOutput=journal`). Alternatively, use `logger -t btrshot` for direct syslog submission.
 
 View logs:
 ```bash
@@ -330,49 +310,63 @@ journalctl -u btrshot.service
 journalctl -u btrshot.service -f   # follow
 ```
 
-## systemd Unit
+## systemd Units
 
-Only a single service unit is needed. The daemon manages its own schedule internally.
+### btrshot.timer
+
+```ini
+[Unit]
+Description=btrshot backup timer
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=2h
+Unit=btrshot.service
+
+[Install]
+WantedBy=timers.target
+```
 
 ### btrshot.service
 
 ```ini
 [Unit]
-Description=btrshot backup daemon (btrfs snapshot to local + S3)
+Description=btrshot backup (btrfs snapshot to local + S3)
 After=network-online.target
 Wants=network-online.target
 ConditionPathIsMountPoint=/path/to/A
 ConditionPathIsMountPoint=/path/to/B
 
 [Service]
-Type=notify
-ExecStart=/usr/local/bin/btrshot --config /etc/btrshot/config.toml
-Restart=on-failure
-RestartSec=60
+Type=oneshot
+ExecStart=/usr/local/bin/btrshot.sh
+StandardOutput=journal
+StandardError=journal
 EnvironmentFile=-/etc/btrshot/aws.env
-
-[Install]
-WantedBy=multi-user.target
 ```
 
-`Type=notify` enables the daemon to signal systemd via `sd_notify` (using the `libsystemd` or `sd-notify` crate) once it has finished startup validation and entered the scheduler loop. `Restart=on-failure` ensures the daemon is restarted if it crashes.
+`ConditionPathIsMountPoint` lines must be customised to actual mount paths during installation.
 
-`/etc/btrshot/aws.env` optionally holds `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or `AWS_PROFILE` (mode `0600`).
+Enable the timer (not the service directly):
+```bash
+systemctl enable --now btrshot.timer
+```
 
 ## File List
 
 | File | Description |
 |------|-------------|
-| `/usr/local/bin/btrshot` | Compiled Rust daemon binary |
-| `/etc/btrshot/config.toml` | Configuration file |
+| `/usr/local/bin/btrshot.sh` | Main backup script |
+| `/etc/btrshot/btrshot.conf` | Configuration file |
 | `/etc/btrshot/aws.env` | AWS credentials environment file (optional) |
-| `/etc/systemd/system/btrshot.service` | systemd service unit |
+| `/etc/systemd/system/btrshot.service` | systemd oneshot service unit |
+| `/etc/systemd/system/btrshot.timer` | systemd timer unit |
 
 ## Security Considerations
 
-1. **Configuration file permissions**: `/etc/btrshot/config.toml` and `aws.env` should be readable only by root
+1. **Configuration file permissions**: `/etc/btrshot/btrshot.conf` and `aws.env` should be readable only by root
    ```bash
-   chmod 600 /etc/btrshot/config.toml /etc/btrshot/aws.env
+   chmod 600 /etc/btrshot/btrshot.conf /etc/btrshot/aws.env
    ```
 
 2. **GPG key**: Public key only needed for encryption; private key should be stored securely offline for recovery
@@ -381,9 +375,9 @@ WantedBy=multi-user.target
 
 4. **S3 bucket policy**: Restrict access, enable versioning and server-side encryption as additional protection
 
-5. **No external locking needed**: Because btrshot is a single persistent daemon, only one backup operation runs at a time by design. No `flock` is required.
+5. **Concurrent runs**: systemd's `Type=oneshot` serializes runs naturally; if a previous run is still active when the timer fires, systemd will queue or skip it. Use `flock` on the state file as an additional guard if running outside systemd.
 
-6. **Mount validation**: At startup and before each backup, verify `/path/to/A` and `/path/to/B` are mounted btrfs filesystems at the expected paths; abort if mounts are missing to avoid writing to the wrong disk.
+6. **Mount validation**: Before each backup, verify `/path/to/A` and `/path/to/B` are mounted btrfs filesystems at the expected paths; abort if mounts are missing to avoid writing to the wrong disk.
 
 ## Recovery Procedure
 
