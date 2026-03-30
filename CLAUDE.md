@@ -18,7 +18,9 @@ The previous Rust implementation was abandoned (see git history). The project is
 |------|---------|
 | `btrshot.sh` | Main script — the entire implementation |
 | `DESIGN.md` | Complete specification; authoritative reference for behavior |
-| `task.md` | Implementation task checklist with dependency ordering |
+| `btrshot.conf.example` | Documented configuration template |
+| `btrshot.service` | systemd oneshot service unit |
+| `btrshot.timer` | systemd timer unit (every 2h) |
 
 ## Architecture
 
@@ -44,9 +46,10 @@ systemd timer (2h) → btrshot.service → btrshot.sh
 
 ## Configuration
 
-The script reads `/etc/btrshot/btrshot.conf` (required) and `/etc/btrshot/aws.env` (optional). See DESIGN.md §Configuration for the full variable list and a sample config. Both files must be mode 600.
+The script sources `/etc/btrshot/btrshot.conf` (required; override with `$BTRSHOT_CONFIG`). AWS credentials can be supplied via `/etc/btrshot/aws.env`, which is loaded by the systemd service unit (`EnvironmentFile=-`), not by the script itself. See DESIGN.md §Configuration for details.
 
-Required variables: `SOURCE_SUBVOL`, `SNAPSHOT_DIR`, `BACKUP_MOUNT`, `BACKUP_SUBVOL_DIR`, `STATE_DIR`, `S3_BUCKET`, `GPG_RECIPIENT`.
+Required variables: `SOURCE_PATH`, `SOURCE_SUBVOLUME`, `BACKUP_PATH`, `S3_BUCKET`, `S3_RETENTION_COUNT`, `GPG_PUBLIC_KEY_FILE`.
+Optional (have defaults): `FULL_BACKUP_INTERVAL` (604800), `INCREMENTAL_INTERVAL` (86400), `STATE_DIR` (/var/lib/btrshot).
 
 ## Development Notes
 
