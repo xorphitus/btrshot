@@ -410,11 +410,11 @@ rsync -aHAX /path/to/restore/full_YYYYMMDD_HHMMSS/ /path/to/target_subvol/
 
 ### Overview
 
-Integration tests run inside a `systemd-nspawn` container to provide an isolated environment with real btrfs filesystems and a local S3-compatible endpoint (MinIO). This avoids polluting the host and allows safe use of privileged btrfs operations.
+Integration tests run inside a Docker container to provide an isolated environment with real btrfs filesystems and a local S3-compatible endpoint (MinIO). This avoids polluting the host and allows safe use of privileged btrfs operations.
 
 ### Container Requirements
 
-The nspawn container rootfs must include:
+The Docker image must include:
 
 | Package | Purpose |
 |---------|---------|
@@ -430,21 +430,16 @@ The nspawn container rootfs must include:
 
 The test harness script (`test/run.sh`) performs:
 
-1. **Build rootfs** — Create a minimal rootfs directory (or reuse a cached one) with the packages above. On NixOS, a Nix expression (`test/nspawn-rootfs.nix`) can declaratively build this.
+1. **Build image** — Build (or reuse cached) the Docker image from `test/Dockerfile`.
 
-2. **Launch container** — Start the container with the privileges needed for btrfs and loopback devices:
+2. **Launch container** — Run the container with `--privileged` for btrfs and loopback device access:
    ```bash
-   systemd-nspawn \
-       --directory="$ROOTFS" \
-       --bind-ro="$PROJECT_DIR:/opt/btrshot" \
-       --capability=CAP_SYS_ADMIN \
-       --property=DeviceAllow="block-loop rwm" \
-       --bind=/dev/loop-control \
-       -- /opt/btrshot/test/entrypoint.sh
+   docker run --rm --privileged \
+       -v "$PROJECT_DIR:/opt/btrshot:ro" \
+       btrshot-test
    ```
-   - `--capability=CAP_SYS_ADMIN` — required for btrfs subvolume operations and mounting loopback devices.
-   - `--bind-ro` — mounts the project directory read-only so the container can access the script and test code.
-   - `--property=DeviceAllow` and `--bind=/dev/loop-control` — allow loopback device creation inside the container.
+   - `--privileged` — required for btrfs subvolume operations, mounting loopback devices, and creating filesystems.
+   - `-v ... :ro` — mounts the project directory read-only so the container can access the script and test code.
 
 3. **Exit code** — The container's exit code is propagated as the test suite result.
 
@@ -591,8 +586,8 @@ Each test case is a Bash function in `test/test_cases.sh`. The harness runs them
 
 ```
 test/
-├── run.sh              # Host-side entry point: builds rootfs, launches nspawn
-├── nspawn-rootfs.nix   # Nix expression to build the container rootfs
+├── run.sh              # Host-side entry point: builds image, launches Docker container
+├── Dockerfile          # Docker image with all required packages
 ├── entrypoint.sh       # Container-side: env setup, runs test cases, reports results
 ├── test_cases.sh       # Test case functions (T1–T10)
 └── helpers.sh          # Assertion utilities (assert_eq, assert_file_exists, etc.)
@@ -615,10 +610,10 @@ fail()               { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
 From the project root on the host:
 
 ```bash
-sudo test/run.sh
+test/run.sh
 ```
 
-The harness prints each test name and its pass/fail status, then exits non-zero if any test failed.
+The harness prints each test name and its pass/fail status, then exits non-zero if any test failed. `sudo` is not required if the current user is in the `docker` group.
 
 ### AWS Endpoint Compatibility
 

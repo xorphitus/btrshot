@@ -1,51 +1,24 @@
 #!/usr/bin/env bash
 # Host-side entry point for the btrshot integration test suite.
-# Builds (or reuses) the nspawn rootfs, then launches systemd-nspawn
-# with the privileges needed for btrfs and loopback devices.
+# Builds a Docker image and runs the tests inside a privileged container
+# with full access to loopback and btrfs operations.
 #
-# Usage:  sudo test/run.sh
+# Usage:  test/run.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ---------------------------------------------------------------------------
-# 1. Build (or reuse cached) rootfs via nspawn-rootfs.nix
+# 1. Build (or reuse cached) Docker image
 # ---------------------------------------------------------------------------
-NIX_EXPR="$SCRIPT_DIR/nspawn-rootfs.nix"
-
-if [[ ! -f "$NIX_EXPR" ]]; then
-  echo "ERROR: $NIX_EXPR not found" >&2
-  exit 1
-fi
-
-echo "Building rootfs (nix-build)..."
-ROOTFS="$(nix-build "$NIX_EXPR" --no-out-link)"
-echo "Rootfs: $ROOTFS"
+echo "Building Docker image..."
+docker build -t btrshot-test "$SCRIPT_DIR"
 
 # ---------------------------------------------------------------------------
-# 2. Launch systemd-nspawn
+# 2. Run tests in a privileged container
 # ---------------------------------------------------------------------------
-# Pre-create a pool of loop devices so the container can use them.
-# loop-control can allocate new indices but nspawn's private /dev won't
-# surface the resulting /dev/loopN nodes unless we bind them in.
-LOOP_DEVICES=()
-for i in $(seq 0 7); do
-  node="/dev/loop${i}"
-  [[ -b "$node" ]] || mknod -m 0660 "$node" b 7 "$i" 2>/dev/null || true
-  if [[ -b "$node" ]]; then
-    LOOP_DEVICES+=("--bind=$node")
-  fi
-done
-
-echo "Launching systemd-nspawn container..."
-exec systemd-nspawn \
-    --directory="$ROOTFS" \
-    --volatile=overlay \
-    --bind-ro="$PROJECT_DIR:/opt/btrshot" \
-    --bind-ro=/nix/store \
-    --capability=CAP_SYS_ADMIN \
-    --property=DeviceAllow="block-loop rwm" \
-    --bind=/dev/loop-control \
-    "${LOOP_DEVICES[@]}" \
-    -- /opt/btrshot/test/entrypoint.sh
+echo "Launching test container..."
+exec docker run --rm --privileged \
+    -v "$PROJECT_DIR:/opt/btrshot:ro" \
+    btrshot-test
