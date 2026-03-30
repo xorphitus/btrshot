@@ -20,7 +20,7 @@
 
 ### #2 Create test/test_cases.sh — test case functions T1–T10
 - **Blocked by**: #1
-- **Status**: pending
+- **Status**: done
 - **Description**: Implement all 10 test case functions (T1: first full backup, T2: incremental after full, T3: skip, T4–T6: recovery scenarios, T7: S3 retention, T8–T10: validation failures). Each test is a Bash function that uses helpers.sh assertions.
 
 ### #3 Create test/entrypoint.sh — container-side env setup and test runner
