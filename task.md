@@ -30,7 +30,7 @@
 
 ### #4 Create test/nspawn-rootfs.nix — Nix expression for container rootfs
 - **Blocked by**: (none)
-- **Status**: pending
+- **Status**: done
 - **Description**: Write a Nix expression that builds a minimal rootfs directory containing all required packages (btrfs-progs, gnupg, awscli2, minio, util-linux, coreutils, bash, tar).
 
 ### #5 Create test/run.sh — host-side entry point
