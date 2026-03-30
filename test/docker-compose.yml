@@ -1,0 +1,15 @@
+services:
+  floci:
+    image: hectorvent/floci:latest
+    ports:
+      - "4566"
+
+  test:
+    build: .
+    privileged: true
+    depends_on:
+      - floci
+    environment:
+      - AWS_ENDPOINT_URL=http://floci:4566
+    volumes:
+      - ..:/opt/btrshot:ro

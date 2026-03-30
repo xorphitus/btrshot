@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Container-side entrypoint for the btrshot integration test suite.
-# Runs inside systemd-nspawn; expects privileged capabilities for btrfs/loopback.
+# Runs inside a privileged Docker container for btrfs/loopback operations.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -41,26 +41,20 @@ GPGEOF
 gpg --batch --export "btrshot-test" > /tmp/test.gpg
 
 # ---------------------------------------------------------------------------
-# 4. Start MinIO in the background and create the bucket
+# 4. Wait for floci (S3-compatible server) and create the bucket
 # ---------------------------------------------------------------------------
-export MINIO_ROOT_USER=minioadmin
-export MINIO_ROOT_PASSWORD=minioadmin
-export AWS_ACCESS_KEY_ID=minioadmin
-export AWS_SECRET_ACCESS_KEY=minioadmin
-export AWS_ENDPOINT_URL=http://localhost:9000
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+# AWS_ENDPOINT_URL is passed in via docker-compose environment.
 
-minio server /tmp/minio-data --address ":9000" &
-MINIO_PID=$!
-
-# Wait for MinIO to become ready.
 for _ in $(seq 1 30); do
-  if aws --endpoint-url http://localhost:9000 s3 ls >/dev/null 2>&1; then
+  if aws s3 ls >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
 
-aws --endpoint-url http://localhost:9000 s3 mb s3://btrshot-test
+aws s3 mb s3://btrshot-test
 
 # ---------------------------------------------------------------------------
 # 5. Write test config
@@ -140,7 +134,6 @@ echo "==============================="
 echo "Results: $PASSED passed, $FAILED failed (of ${#TESTS[@]} tests)"
 echo "==============================="
 
-kill "$MINIO_PID" 2>/dev/null || true
 umount /mnt/A 2>/dev/null || true
 umount /mnt/B 2>/dev/null || true
 
