@@ -1,0 +1,63 @@
+# btrshot.conf.example — Example configuration for btrshot
+#
+# Copy this file to /etc/btrshot/btrshot.conf and edit to match your setup.
+# This file is sourced by btrshot.sh as a Bash script.
+# Permissions: chmod 600 /etc/btrshot/btrshot.conf
+
+# ---------------------------------------------------------------------------
+# Source (Disk A)
+# ---------------------------------------------------------------------------
+
+# Mount point of the btrfs filesystem containing the subvolume to back up.
+SOURCE_PATH="/mnt/diskA"
+
+# Name of the btrfs subvolume to snapshot (relative to SOURCE_PATH).
+SOURCE_SUBVOLUME="data"
+
+# ---------------------------------------------------------------------------
+# Local backup destination (Disk B)
+# ---------------------------------------------------------------------------
+
+# Mount point of the btrfs filesystem that receives snapshots via btrfs send/receive.
+# Must be a btrfs filesystem.
+BACKUP_PATH="/mnt/diskB"
+
+# ---------------------------------------------------------------------------
+# S3 remote backup
+# ---------------------------------------------------------------------------
+
+# S3 bucket (and optional prefix) for encrypted offsite backups.
+S3_BUCKET="your-bucket-name"
+
+# Number of most-recent S3 objects to keep. Older objects are deleted after each upload.
+S3_RETENTION_COUNT=10
+
+# AWS credentials: configure via environment variables (AWS_ACCESS_KEY_ID,
+# AWS_SECRET_ACCESS_KEY), an AWS_PROFILE, instance role, or /etc/btrshot/aws.env.
+# Uncomment the following line to use a named profile:
+# AWS_PROFILE="backup-profile"
+
+# ---------------------------------------------------------------------------
+# Encryption
+# ---------------------------------------------------------------------------
+
+# Path to the GPG public key file used to encrypt backups before S3 upload.
+GPG_PUBLIC_KEY_FILE="/etc/btrshot/backup-key.pub"
+
+# ---------------------------------------------------------------------------
+# Intervals (optional — defaults shown)
+# ---------------------------------------------------------------------------
+
+# Seconds between full backups (default: 604800 = 7 days).
+FULL_BACKUP_INTERVAL=604800
+
+# Seconds between incremental backups (default: 86400 = 24 hours).
+INCREMENTAL_INTERVAL=86400
+
+# ---------------------------------------------------------------------------
+# State directory (optional — default shown)
+# ---------------------------------------------------------------------------
+
+# Directory where btrshot stores its state and timestamp files.
+# Created automatically if it does not exist.
+STATE_DIR="/var/lib/btrshot"

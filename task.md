@@ -13,7 +13,7 @@
 - [x] 9. Backup decision logic (main entry point)
 - [x] 10. Logging
 - [x] 11. systemd units (timer + service)
-- [ ] 12. Example config file
+- [x] 12. Example config file
 - [ ] 13. Integration smoke test (optional, manual)
 
 ---
