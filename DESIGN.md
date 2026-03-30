@@ -405,3 +405,221 @@ Optional: If you want restored data back on btrfs as a new subvolume:
 btrfs subvolume create /path/to/target_subvol
 rsync -aHAX /path/to/restore/full_YYYYMMDD_HHMMSS/ /path/to/target_subvol/
 ```
+
+## Automated Testing
+
+### Overview
+
+Integration tests run inside a `systemd-nspawn` container to provide an isolated environment with real btrfs filesystems and a local S3-compatible endpoint (MinIO). This avoids polluting the host and allows safe use of privileged btrfs operations.
+
+### Container Requirements
+
+The nspawn container rootfs must include:
+
+| Package | Purpose |
+|---------|---------|
+| `btrfs-progs` | `btrfs subvolume`, `btrfs send/receive` |
+| `gnupg` | GPG encryption |
+| `awscli` (v2) | S3 upload/download/retention |
+| `minio` | Local S3-compatible object store |
+| `util-linux` | `losetup`, `mount` |
+| `coreutils`, `bash` | Script runtime |
+| `tar` | Archive creation |
+
+### Container Setup
+
+The test harness script (`test/run.sh`) performs:
+
+1. **Build rootfs** — Create a minimal rootfs directory (or reuse a cached one) with the packages above. On NixOS, a Nix expression (`test/nspawn-rootfs.nix`) can declaratively build this.
+
+2. **Launch container** — Start the container with the privileges needed for btrfs and loopback devices:
+   ```bash
+   systemd-nspawn \
+       --directory="$ROOTFS" \
+       --bind-ro="$PROJECT_DIR:/opt/btrshot" \
+       --capability=CAP_SYS_ADMIN \
+       --property=DeviceAllow="block-loop rwm" \
+       --bind=/dev/loop-control \
+       -- /opt/btrshot/test/entrypoint.sh
+   ```
+   - `--capability=CAP_SYS_ADMIN` — required for btrfs subvolume operations and mounting loopback devices.
+   - `--bind-ro` — mounts the project directory read-only so the container can access the script and test code.
+   - `--property=DeviceAllow` and `--bind=/dev/loop-control` — allow loopback device creation inside the container.
+
+3. **Exit code** — The container's exit code is propagated as the test suite result.
+
+### Test Environment Initialization
+
+Inside the container, `test/entrypoint.sh` sets up the sandbox:
+
+```
+1. Create two loopback btrfs images (512 MB each)
+   truncate -s 512M /tmp/disk_a.img /tmp/disk_b.img
+   mkfs.btrfs /tmp/disk_a.img && mkfs.btrfs /tmp/disk_b.img
+   mount -o loop /tmp/disk_a.img /mnt/A
+   mount -o loop /tmp/disk_b.img /mnt/B
+
+2. Create source subvolume with seed data
+   btrfs subvolume create /mnt/A/data
+   echo "seed" > /mnt/A/data/file1.txt
+
+3. Generate a throwaway GPG key pair (no passphrase)
+   gpg --batch --gen-key ...
+   gpg --export "btrshot-test" > /tmp/test.gpg
+
+4. Start MinIO in the background on localhost:9000
+   minio server /tmp/minio-data &
+   aws --endpoint-url http://localhost:9000 s3 mb s3://btrshot-test
+
+5. Write test config (/tmp/btrshot-test.conf)
+   SOURCE_PATH=/mnt/A
+   SOURCE_SUBVOLUME=data
+   BACKUP_PATH=/mnt/B
+   S3_BUCKET=btrshot-test
+   S3_RETENTION_COUNT=10
+   GPG_PUBLIC_KEY_FILE=/tmp/test.gpg
+   FULL_BACKUP_INTERVAL=604800
+   INCREMENTAL_INTERVAL=86400
+   STATE_DIR=/tmp/btrshot-state
+
+6. Export AWS environment for MinIO
+   AWS_ACCESS_KEY_ID=minioadmin
+   AWS_SECRET_ACCESS_KEY=minioadmin
+   AWS_ENDPOINT_URL=http://localhost:9000
+```
+
+### Test Cases
+
+Each test case is a Bash function in `test/test_cases.sh`. The harness runs them sequentially, resetting state between tests where noted. A test fails if it exits non-zero or if an assertion (`assert_*` helper) fails.
+
+#### T1: First run triggers full backup
+
+- **Precondition**: Clean state (no `last_full_backup` file).
+- **Action**: Run `btrshot.sh`.
+- **Assertions**:
+  - Exit code 0.
+  - A `full_*` snapshot directory exists under `/mnt/B/snapshots/`.
+  - `/mnt/B/current` symlink points to the new snapshot.
+  - `file1.txt` exists inside the snapshot on B with correct content.
+  - `.snap_base_full` exists on A (retained for future incrementals).
+  - `last_full_backup` timestamp file exists and contains a recent epoch.
+  - State file reads `idle`.
+  - A `.tar.gpg` object exists in MinIO bucket.
+
+#### T2: Incremental backup after full
+
+- **Precondition**: T1 completed; modify source data and advance `last_full_backup` to be recent but `last_incremental_backup` to be old (or absent).
+- **Action**: Add `file2.txt` to source, then run `btrshot.sh`.
+- **Assertions**:
+  - An `incr_*` snapshot exists on B.
+  - `file2.txt` is present in the incremental snapshot.
+  - `.snap_base_full` on A has been rotated (different inode/generation from T1).
+  - `last_incremental_backup` timestamp updated.
+  - A second `.tar.gpg` object exists in MinIO.
+
+#### T3: Skip when no backup needed
+
+- **Precondition**: Both `last_full_backup` and `last_incremental_backup` are recent (within their intervals).
+- **Action**: Run `btrshot.sh`.
+- **Assertions**:
+  - Exit code 0.
+  - stdout contains "No backup needed".
+  - No new snapshot created on B.
+
+#### T4: Recovery from interrupted full backup
+
+- **Precondition**: Simulate interruption by writing `in_progress:full:<ts>:` to the state file and creating a partial `.snap_tmp` on A.
+- **Action**: Run `btrshot.sh`.
+- **Assertions**:
+  - `.snap_tmp` on A is deleted (cleanup).
+  - Partial `.snap_tmp` on B is deleted (if created).
+  - State returns to `idle`.
+  - Script re-evaluates and runs the appropriate backup.
+
+#### T5: Recovery from interrupted incremental backup
+
+- **Precondition**: Simulate interruption by writing `in_progress:incremental:<ts>:` and creating `.snap_tmp` on A and B.
+- **Action**: Run `btrshot.sh`.
+- **Assertions**:
+  - Temporary snapshots cleaned up on both A and B.
+  - State returns to `idle`.
+  - Script re-evaluates and runs the appropriate backup.
+
+#### T6: Recovery from interrupted S3 upload
+
+- **Precondition**: Complete a local full backup (snapshot exists on B), then write `in_progress:s3_upload:<ts>:<snap_name>` to the state file.
+- **Action**: Run `btrshot.sh`.
+- **Assertions**:
+  - S3 upload completes for the named snapshot.
+  - Corresponding timestamp file is updated.
+  - State returns to `idle`.
+
+#### T7: S3 retention enforcement
+
+- **Precondition**: Upload 11+ objects to the MinIO bucket (mock old backups).
+- **Action**: Run a full backup (which triggers `run_s3_upload` with retention logic).
+- **Assertions**:
+  - Total object count in MinIO bucket <= `S3_RETENTION_COUNT`.
+  - Oldest objects were deleted, newest retained.
+
+#### T8: Config validation — missing required variable
+
+- **Precondition**: Config file with `S3_BUCKET` omitted.
+- **Action**: Run `btrshot.sh`.
+- **Assertions**:
+  - Exit code non-zero.
+  - stderr contains "missing required config variable(s)".
+  - No snapshots created.
+
+#### T9: Source validation — not a btrfs subvolume
+
+- **Precondition**: Config points `SOURCE_SUBVOLUME` to a regular directory (not a subvolume).
+- **Action**: Run `btrshot.sh`.
+- **Assertions**:
+  - Exit code non-zero.
+  - stderr contains "not a btrfs subvolume".
+
+#### T10: Backup FS validation — not btrfs
+
+- **Precondition**: `BACKUP_PATH` points to a tmpfs or ext4 mount.
+- **Action**: Run `btrshot.sh`.
+- **Assertions**:
+  - Exit code non-zero.
+  - stderr contains "not a btrfs filesystem".
+
+### Test Harness Structure
+
+```
+test/
+├── run.sh              # Host-side entry point: builds rootfs, launches nspawn
+├── nspawn-rootfs.nix   # Nix expression to build the container rootfs
+├── entrypoint.sh       # Container-side: env setup, runs test cases, reports results
+├── test_cases.sh       # Test case functions (T1–T10)
+└── helpers.sh          # Assertion utilities (assert_eq, assert_file_exists, etc.)
+```
+
+### Assertion Helpers (`test/helpers.sh`)
+
+```bash
+assert_eq()          { [[ "$1" == "$2" ]] || fail "expected '$2', got '$1'"; }
+assert_ne()          { [[ "$1" != "$2" ]] || fail "expected != '$2'"; }
+assert_file_exists() { [[ -f "$1" ]] || fail "file not found: $1"; }
+assert_dir_exists()  { [[ -d "$1" ]] || fail "directory not found: $1"; }
+assert_contains()    { echo "$1" | grep -qF "$2" || fail "output missing: $2"; }
+assert_exit_code()   { [[ "$1" -eq "$2" ]] || fail "exit code $1, expected $2"; }
+fail()               { echo "FAIL: $*" >&2; FAILURES=$((FAILURES + 1)); }
+```
+
+### Running Tests
+
+From the project root on the host:
+
+```bash
+sudo test/run.sh
+```
+
+The harness prints each test name and its pass/fail status, then exits non-zero if any test failed.
+
+### AWS Endpoint Compatibility
+
+The script's `aws s3 cp` and `aws s3 ls` commands must reach MinIO inside the container. The AWS CLI respects `AWS_ENDPOINT_URL` (v2) or the `--endpoint-url` flag. The test config exports `AWS_ENDPOINT_URL=http://localhost:9000` so no script modifications are needed when using AWS CLI v2. If using AWS CLI v1, the entrypoint must configure an alias or wrapper that injects `--endpoint-url`.
