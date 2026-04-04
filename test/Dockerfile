@@ -20,4 +20,6 @@ RUN apt-get update && \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+COPY . /opt/btrshot
+
 ENTRYPOINT ["/opt/btrshot/test/entrypoint.sh"]

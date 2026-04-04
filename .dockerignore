@@ -1,0 +1,9 @@
+.git
+.jj
+.claude
+.github
+.vscode
+.idea
+*.md
+!btrshot.conf.example
+LICENSE
