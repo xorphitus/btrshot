@@ -11,8 +11,7 @@ class TestSequentialWorkflow:
 
     def test_t1_first_full_backup(self, runner):
         runner.full_reset()
-        result = runner.run()
-        assert result.returncode == 0, result.stderr
+        result = runner.run_ok()
 
         snaps = runner.find_snapshots("full_*")
         assert snaps, "no full_* snapshot found"
@@ -38,8 +37,7 @@ class TestSequentialWorkflow:
         # Add new data.
         (runner.source_path / runner.source_subvolume / "file2.txt").write_text("extra")
 
-        result = runner.run()
-        assert result.returncode == 0, result.stderr
+        result = runner.run_ok()
 
         incr_snaps = runner.find_snapshots("incr_*")
         assert incr_snaps, "no incr_* snapshot found"
@@ -59,148 +57,104 @@ class TestSequentialWorkflow:
 
         before = runner.count_all_snapshots()
 
-        result = runner.run()
-        assert result.returncode == 0, result.stderr
-        assert "No backup needed" in (result.stdout + result.stderr)
+        result = runner.run_ok()
+        assert "No backup needed" in result.stdout
         assert runner.count_all_snapshots() == before
 
 
-def test_t4_recovery_full(runner):
-    runner.full_reset()
+def test_t4_recovery_full(clean_runner):
+    clean_runner.simulate_interruption("full")
 
-    # Simulate interrupted full backup.
-    subprocess.run(
-        [
-            "btrfs", "subvolume", "snapshot", "-r",
-            str(runner.source_path / runner.source_subvolume),
-            str(runner.source_path / ".snap_tmp"),
-        ],
-        check=True,
-    )
-    now = str(int(time.time()))
-    (runner.state_dir / "state").write_text(f"in_progress:full:{now}:")
+    result = clean_runner.run_ok()
 
-    result = runner.run()
-    assert result.returncode == 0, result.stderr
+    assert not (clean_runner.source_path / ".snap_tmp").is_dir(), ".snap_tmp not cleaned up"
+    assert "idle" in clean_runner.read_state()
 
-    assert not (runner.source_path / ".snap_tmp").is_dir(), ".snap_tmp not cleaned up"
-    assert "idle" in runner.read_state()
-
-    snaps = runner.find_snapshots("full_*")
+    snaps = clean_runner.find_snapshots("full_*")
     assert snaps, "no full backup created after recovery"
 
 
-def test_t5_recovery_incremental(runner):
-    runner.full_reset()
-
+def test_t5_recovery_incremental(clean_runner):
     # Run a full backup first.
-    result = runner.run()
-    assert result.returncode == 0, result.stderr
+    clean_runner.run_ok()
 
     # Simulate interrupted incremental.
-    subprocess.run(
-        [
-            "btrfs", "subvolume", "snapshot", "-r",
-            str(runner.source_path / runner.source_subvolume),
-            str(runner.source_path / ".snap_tmp"),
-        ],
-        check=True,
-    )
+    clean_runner.simulate_interruption("incremental")
     now = str(int(time.time()))
-    (runner.state_dir / "state").write_text(f"in_progress:incremental:{now}:")
-    (runner.state_dir / "last_full_backup").write_text(now)
-    (runner.state_dir / "last_incremental_backup").unlink(missing_ok=True)
+    (clean_runner.state_dir / "last_full_backup").write_text(now)
+    (clean_runner.state_dir / "last_incremental_backup").unlink(missing_ok=True)
 
-    result = runner.run()
-    assert result.returncode == 0, result.stderr
+    result = clean_runner.run_ok()
 
-    assert not (runner.source_path / ".snap_tmp").is_dir(), ".snap_tmp not cleaned up"
-    assert "idle" in runner.read_state()
+    assert not (clean_runner.source_path / ".snap_tmp").is_dir(), ".snap_tmp not cleaned up"
+    assert "idle" in clean_runner.read_state()
 
 
-def test_t6_recovery_s3_upload(runner):
-    runner.full_reset()
-
+def test_t6_recovery_s3_upload(clean_runner):
     # Run a full backup first.
-    result = runner.run()
-    assert result.returncode == 0, result.stderr
+    clean_runner.run_ok()
 
     # Identify the snapshot name.
-    snaps = runner.find_snapshots("full_*")
+    snaps = clean_runner.find_snapshots("full_*")
     assert snaps
     snap_name = snaps[0].name
 
     # Clear S3 and simulate interrupted s3_upload state.
-    runner.clear_s3_bucket()
-    now = str(int(time.time()))
-    (runner.state_dir / "state").write_text(f"in_progress:s3_upload:{now}:{snap_name}")
-    (runner.state_dir / "last_full_backup").unlink(missing_ok=True)
+    clean_runner.clear_s3_bucket()
+    clean_runner.simulate_interruption("s3_upload", snap_name=snap_name)
+    (clean_runner.state_dir / "last_full_backup").unlink(missing_ok=True)
 
-    result = runner.run()
-    assert result.returncode == 0, result.stderr
+    result = clean_runner.run_ok()
 
-    assert runner.count_s3_objects() >= 1, "no S3 object after recovery"
-    assert "idle" in runner.read_state()
+    assert clean_runner.count_s3_objects() >= 1, "no S3 object after recovery"
+    assert "idle" in clean_runner.read_state()
 
 
-def test_t7_s3_retention(runner):
-    runner.full_reset()
-
+def test_t7_s3_retention(clean_runner):
     # Upload 11 dummy objects to exceed S3_RETENTION_COUNT (10).
     for i in range(1, 12):
         subprocess.run(
-            ["aws", "s3", "cp", "-", f"s3://{runner.s3_bucket}/dummy_{i:02d}.tar.gpg"],
+            ["aws", "s3", "cp", "-", f"s3://{clean_runner.s3_bucket}/dummy_{i:02d}.tar.gpg"],
             input=b"dummy",
             check=True,
         )
 
-    assert runner.count_s3_objects() >= 11
+    assert clean_runner.count_s3_objects() >= 11
 
     # Run a full backup — its S3 upload path enforces retention.
-    result = runner.run()
-    assert result.returncode == 0, result.stderr
+    result = clean_runner.run_ok()
 
-    assert runner.count_s3_objects() <= 10, "S3 retention not enforced"
-
-
-def test_t8_config_missing_var(runner):
-    runner.full_reset()
-
-    conf = runner.write_config(omit={"S3_BUCKET"})
-    result = runner.run(config_path=conf)
-
-    assert result.returncode != 0
-    assert "missing required config variable(s)" in (result.stdout + result.stderr)
-
-    assert runner.count_all_snapshots() == 0
+    assert clean_runner.count_s3_objects() <= 10, "S3 retention not enforced"
 
 
-def test_t9_source_not_subvolume(runner):
-    runner.full_reset()
+def test_t8_config_missing_var(clean_runner):
+    conf = clean_runner.write_config(omit={"S3_BUCKET"})
+    result = clean_runner.run_fail(config_path=conf)
 
-    fake_dir = runner.source_path / "not_a_subvol"
+    assert "missing required config variable(s)" in result.stdout
+    assert clean_runner.count_all_snapshots() == 0
+
+
+def test_t9_source_not_subvolume(clean_runner):
+    fake_dir = clean_runner.source_path / "not_a_subvol"
     fake_dir.mkdir(exist_ok=True)
 
-    conf = runner.write_config(overrides={"SOURCE_SUBVOLUME": "not_a_subvol"})
-    result = runner.run(config_path=conf)
+    conf = clean_runner.write_config(SOURCE_SUBVOLUME="not_a_subvol")
+    result = clean_runner.run_fail(config_path=conf)
 
-    assert result.returncode != 0
-    assert "not a btrfs subvolume" in (result.stdout + result.stderr)
+    assert "not a btrfs subvolume" in result.stdout
 
 
-def test_t10_backup_not_btrfs(runner):
-    runner.full_reset()
-
+def test_t10_backup_not_btrfs(clean_runner):
     tmpdir = Path("/tmp/btrshot-notbtrfs")
     tmpdir.mkdir(exist_ok=True)
     subprocess.run(["mount", "-t", "tmpfs", "tmpfs", str(tmpdir)], check=True)
 
     try:
-        conf = runner.write_config(overrides={"BACKUP_PATH": str(tmpdir)})
-        result = runner.run(config_path=conf)
+        conf = clean_runner.write_config(BACKUP_PATH=str(tmpdir))
+        result = clean_runner.run_fail(config_path=conf)
 
-        assert result.returncode != 0
-        assert "not a btrfs filesystem" in (result.stdout + result.stderr)
+        assert "not a btrfs filesystem" in result.stdout
     finally:
         subprocess.run(["umount", str(tmpdir)], capture_output=True)
         tmpdir.rmdir()

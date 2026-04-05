@@ -29,9 +29,22 @@ class BtrshotRunner:
         return subprocess.run(
             ["bash", str(self.btrshot_sh)],
             env={**os.environ, "BTRSHOT_CONFIG": cfg},
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
         )
+
+    def run_ok(self, config_path=None):
+        """Run btrshot.sh and assert success."""
+        result = self.run(config_path)
+        assert result.returncode == 0, result.stdout
+        return result
+
+    def run_fail(self, config_path=None):
+        """Run btrshot.sh and assert failure."""
+        result = self.run(config_path)
+        assert result.returncode != 0, result.stdout
+        return result
 
     def find_snapshots(self, pattern: str) -> list[Path]:
         """Find snapshot directories matching a glob pattern under BACKUP_PATH/snapshots."""
@@ -69,7 +82,7 @@ class BtrshotRunner:
             capture_output=True,
         )
 
-    def write_config(self, overrides: dict | None = None, omit: set | None = None) -> Path:
+    def write_config(self, *, omit: set | None = None, **overrides) -> Path:
         """Write a custom config file and return its path."""
         defaults = {
             "SOURCE_PATH": str(self.source_path),
@@ -79,8 +92,7 @@ class BtrshotRunner:
             "S3_RETENTION_COUNT": "10",
             "GPG_PUBLIC_KEY_FILE": str(self.gpg_public_key_file),
         }
-        if overrides:
-            defaults.update(overrides)
+        defaults.update(overrides)
         if omit:
             for key in omit:
                 defaults.pop(key, None)
@@ -126,6 +138,19 @@ class BtrshotRunner:
         self.reset_state()
         self.clean_snapshots()
         self.clear_s3_bucket()
+
+    def simulate_interruption(self, phase, snap_name=None):
+        """Write in_progress state and optionally create .snap_tmp."""
+        if phase in ("full", "incremental"):
+            subprocess.run(
+                ["btrfs", "subvolume", "snapshot", "-r",
+                 str(self.source_path / self.source_subvolume),
+                 str(self.source_path / ".snap_tmp")],
+                check=True,
+            )
+        now = str(int(time.time()))
+        snap_part = snap_name or ""
+        (self.state_dir / "state").write_text(f"in_progress:{phase}:{now}:{snap_part}")
 
     def get_btrfs_generation(self, path: Path) -> int:
         """Get the btrfs generation number for a subvolume."""
@@ -208,3 +233,10 @@ def runner():
     # Teardown
     subprocess.run(["umount", "/mnt/A"], capture_output=True)
     subprocess.run(["umount", "/mnt/B"], capture_output=True)
+
+
+@pytest.fixture
+def clean_runner(runner):
+    """Yield a runner that has been fully reset."""
+    runner.full_reset()
+    return runner
