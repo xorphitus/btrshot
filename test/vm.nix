@@ -6,6 +6,7 @@
   # --------------------------------------------------------------------------
   virtualisation.graphics = false;
   systemd.services."serial-getty@ttyS0".enable = false;
+  systemd.settings.Manager.ShowStatus = "no";
   virtualisation.memorySize = 512;
   # Two empty 64 MB disks → /dev/vdb and /dev/vdc
   virtualisation.emptyDiskImages = [ 64 64 ];
