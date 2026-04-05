@@ -5,6 +5,7 @@
   # VM hardware
   # --------------------------------------------------------------------------
   virtualisation.graphics = false;
+  systemd.services."serial-getty@ttyS0".enable = false;
   virtualisation.memorySize = 512;
   # Two empty 64 MB disks → /dev/vdb and /dev/vdc
   virtualisation.emptyDiskImages = [ 64 64 ];
@@ -32,6 +33,7 @@
     gnused
     gawk
     kmod
+    rsync
     (python3.withPackages (ps: [ ps.pytest ]))
   ];
 
@@ -62,6 +64,7 @@
       gnused
       gawk
       kmod
+      rsync
       (python3.withPackages (ps: [ ps.pytest ]))
     ];
     serviceConfig = {
