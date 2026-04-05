@@ -1,44 +1,16 @@
 #!/usr/bin/env bash
 # Host-side entry point for the btrshot integration test suite.
 #
-# Default: NixOS QEMU VM (no sudo, no privileged containers).
-# Fallback: --docker flag uses docker-compose (requires privileged).
+# Runs tests inside a NixOS QEMU VM (no sudo, no privileged containers).
 #
-# Usage:  test/run.sh [--docker]
+# Usage:  test/run.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ---------------------------------------------------------------------------
-# Parse arguments
-# ---------------------------------------------------------------------------
-USE_DOCKER=false
-for arg in "$@"; do
-  case "$arg" in
-    --docker) USE_DOCKER=true ;;
-    *) echo "Unknown argument: $arg" >&2; exit 1 ;;
-  esac
-done
-
-# ---------------------------------------------------------------------------
-# Docker Compose path (backward compat)
-# ---------------------------------------------------------------------------
-if [[ "$USE_DOCKER" == "true" ]]; then
-  COMPOSE_CMD="docker compose"
-  if command -v podman >/dev/null 2>&1 && docker --version 2>&1 | grep -qi podman; then
-    COMPOSE_CMD="sudo podman-compose"
-  fi
-
-  echo "Building and launching test containers..."
-  $COMPOSE_CMD -f "$SCRIPT_DIR/docker-compose.yml" up \
-      --build --abort-on-container-exit --exit-code-from test
-  $COMPOSE_CMD -f "$SCRIPT_DIR/docker-compose.yml" down --volumes
-  exit $?
-fi
-
-# ---------------------------------------------------------------------------
-# NixOS QEMU VM path (default)
+# NixOS QEMU VM path
 # ---------------------------------------------------------------------------
 
 # 1. Build the VM
