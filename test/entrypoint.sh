@@ -17,7 +17,6 @@ mount -o loop /tmp/disk_a.img /mnt/A
 mount -o loop /tmp/disk_b.img /mnt/B
 
 # ---------------------------------------------------------------------------
-# 2. Run shared test suite
+# 2. Run test suite via pytest
 # ---------------------------------------------------------------------------
-# shellcheck source=run-suite.sh
-source "$SCRIPT_DIR/run-suite.sh"
+exec python3 -m pytest /opt/btrshot/test/ -v --tb=short

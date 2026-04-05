@@ -23,8 +23,6 @@ mount /dev/vdc /mnt/B
 export AWS_ENDPOINT_URL=http://10.0.2.2:4566
 
 # ---------------------------------------------------------------------------
-# 3. Run shared test suite and capture exit code
+# 3. Run test suite via pytest and capture exit code
 # ---------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck source=run-suite.sh
-source "$SCRIPT_DIR/run-suite.sh"
+python3 -m pytest /etc/btrshot/test/ -v --tb=short

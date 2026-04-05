@@ -18,6 +18,8 @@ RUN apt-get update && \
         kmod \
         awscli \
         ca-certificates \
+        python3 \
+        python3-pytest \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /opt/btrshot
