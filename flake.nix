@@ -10,6 +10,8 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
+      btrshot = pkgs.callPackage ./package.nix { };
+
       testVm = nixpkgs.lib.nixosSystem {
         inherit system;
         specialArgs = {
@@ -34,8 +36,14 @@
     in
     {
       packages.${system} = {
+        inherit btrshot;
         test-vm = testVm.config.system.build.vm;
-        default = testVm.config.system.build.vm;
+        default = btrshot;
+      };
+
+      nixosModules.default = { lib, pkgs, ... }: {
+        imports = [ ./module.nix ];
+        services.btrshot.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.btrshot;
       };
     };
 }
