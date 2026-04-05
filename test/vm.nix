@@ -48,6 +48,22 @@
     wantedBy = [ "multi-user.target" ];
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];
+    path = with pkgs; [
+      btrfs-progs
+      gnupg
+      awscli2
+      util-linux
+      coreutils
+      bash
+      gnutar
+      gzip
+      findutils
+      gnugrep
+      gnused
+      gawk
+      kmod
+      (python3.withPackages (ps: [ ps.pytest ]))
+    ];
     serviceConfig = {
       Type = "oneshot";
       ExecStart = "${pkgs.bash}/bin/bash /etc/btrshot/test/vm-entrypoint.sh";
