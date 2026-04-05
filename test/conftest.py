@@ -216,6 +216,7 @@ def runner():
             "%commit\n"
         ),
         check=True,
+        text=True,
     )
     subprocess.run(
         ["gpg", "--batch", "--export", "btrshot-test"],
