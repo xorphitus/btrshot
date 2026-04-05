@@ -1,4 +1,4 @@
-"""Integration tests T1–T10 for btrshot."""
+"""Integration tests T1–T19 for btrshot."""
 
 import os
 import subprocess
@@ -158,3 +158,183 @@ def test_t10_backup_not_btrfs(clean_runner):
     finally:
         subprocess.run(["umount", str(tmpdir)], capture_output=True)
         tmpdir.rmdir()
+
+
+# ---------------------------------------------------------------------------
+# Restore tests (T11–T19)
+# ---------------------------------------------------------------------------
+
+RESTORE_DIR = Path("/tmp/btrshot-restore-test")
+
+
+def _cleanup_restore_dir():
+    """Remove the restore output directory."""
+    if RESTORE_DIR.exists():
+        subprocess.run(["rm", "-rf", str(RESTORE_DIR)], capture_output=True)
+
+
+def _find_restored_snapshot_dir(base: Path) -> Path:
+    """Find the first snapshot directory inside the restore output."""
+    candidates = [d for d in base.iterdir() if d.is_dir() and not d.name.startswith(".")]
+    assert candidates, f"no snapshot directory found in {base}"
+    return sorted(candidates)[0]
+
+
+def test_t11_list_backups(clean_runner):
+    clean_runner.run_ok()
+
+    result = clean_runner.run_restore_ok("--list")
+    assert ".tar.gpg" in result.stdout
+
+
+def test_t12_restore_full_backup(clean_runner):
+    clean_runner.run_ok()
+
+    _cleanup_restore_dir()
+    try:
+        clean_runner.run_restore_ok(
+            "latest",
+            "--output-dir", str(RESTORE_DIR),
+            "--gpg-key", str(clean_runner.gpg_private_key_file),
+        )
+
+        snap_dir = _find_restored_snapshot_dir(RESTORE_DIR)
+        assert (snap_dir / "file1.txt").read_text() == "seed"
+    finally:
+        _cleanup_restore_dir()
+
+
+def test_t13_restore_incremental_backup(clean_runner):
+    # Full backup
+    clean_runner.run_ok()
+
+    # Set up for incremental
+    now = str(int(time.time()))
+    (clean_runner.state_dir / "last_full_backup").write_text(now)
+    (clean_runner.state_dir / "last_incremental_backup").unlink(missing_ok=True)
+    (clean_runner.source_path / clean_runner.source_subvolume / "file2.txt").write_text("extra")
+
+    # Incremental backup
+    clean_runner.run_ok()
+
+    _cleanup_restore_dir()
+    try:
+        clean_runner.run_restore_ok(
+            "latest",
+            "--output-dir", str(RESTORE_DIR),
+            "--gpg-key", str(clean_runner.gpg_private_key_file),
+        )
+
+        snap_dir = _find_restored_snapshot_dir(RESTORE_DIR)
+        assert (snap_dir / "file1.txt").exists()
+        assert (snap_dir / "file2.txt").exists()
+    finally:
+        _cleanup_restore_dir()
+
+
+def test_t14_restore_by_name(clean_runner):
+    clean_runner.run_ok()
+
+    # Get the actual backup name from --list
+    list_result = clean_runner.run_restore_ok("--list")
+    backup_name = list_result.stdout.strip().splitlines()[-1].strip()
+    assert backup_name.endswith(".tar.gpg")
+
+    _cleanup_restore_dir()
+    try:
+        clean_runner.run_restore_ok(
+            backup_name,
+            "--output-dir", str(RESTORE_DIR),
+            "--gpg-key", str(clean_runner.gpg_private_key_file),
+        )
+
+        snap_dir = _find_restored_snapshot_dir(RESTORE_DIR)
+        assert (snap_dir / "file1.txt").read_text() == "seed"
+    finally:
+        _cleanup_restore_dir()
+
+
+def test_t15_restore_btrfs_subvol(clean_runner):
+    clean_runner.run_ok()
+
+    _cleanup_restore_dir()
+    subvol_path = clean_runner.backup_path / "restored"
+    try:
+        clean_runner.run_restore_ok(
+            "latest",
+            "--output-dir", str(RESTORE_DIR),
+            "--gpg-key", str(clean_runner.gpg_private_key_file),
+            "--btrfs-subvol", str(subvol_path),
+        )
+
+        # Verify it is a btrfs subvolume
+        show_result = subprocess.run(
+            ["btrfs", "subvolume", "show", str(subvol_path)],
+            capture_output=True, text=True,
+        )
+        assert show_result.returncode == 0, f"not a btrfs subvolume: {show_result.stderr}"
+
+        assert (subvol_path / "file1.txt").read_text() == "seed"
+    finally:
+        subprocess.run(
+            ["btrfs", "subvolume", "delete", str(subvol_path)],
+            capture_output=True,
+        )
+        _cleanup_restore_dir()
+
+
+def test_t16_restore_keep_intermediates(clean_runner):
+    clean_runner.run_ok()
+
+    _cleanup_restore_dir()
+    try:
+        clean_runner.run_restore_ok(
+            "latest",
+            "--output-dir", str(RESTORE_DIR),
+            "--gpg-key", str(clean_runner.gpg_private_key_file),
+            "--keep-intermediates",
+        )
+
+        gpg_files = list(RESTORE_DIR.glob("*.tar.gpg"))
+        tar_files = list(RESTORE_DIR.glob("*.tar"))
+        assert gpg_files, "no .tar.gpg file kept"
+        assert tar_files, "no .tar file kept"
+    finally:
+        _cleanup_restore_dir()
+
+
+def test_t17_restore_missing_backup(clean_runner):
+    result = clean_runner.run_restore_fail(
+        "nonexistent_backup_20991231_235959",
+        "--output-dir", str(RESTORE_DIR),
+        "--gpg-key", str(clean_runner.gpg_private_key_file),
+    )
+
+    assert "not found" in result.stdout.lower() or "error" in result.stdout.lower()
+    _cleanup_restore_dir()
+
+
+def test_t18_restore_no_output_dir(clean_runner):
+    result = clean_runner.run_restore_fail("latest")
+
+    assert "--output-dir" in result.stdout
+
+
+def test_t19_restore_subvol_path_exists(clean_runner):
+    clean_runner.run_ok()
+
+    _cleanup_restore_dir()
+    existing_path = clean_runner.backup_path / "existing-dir"
+    existing_path.mkdir(exist_ok=True)
+    try:
+        result = clean_runner.run_restore_fail(
+            "latest",
+            "--output-dir", str(RESTORE_DIR),
+            "--gpg-key", str(clean_runner.gpg_private_key_file),
+            "--btrfs-subvol", str(existing_path),
+        )
+
+        assert "already exists" in result.stdout.lower()
+    finally:
+        existing_path.rmdir()
+        _cleanup_restore_dir()
