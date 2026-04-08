@@ -16,14 +16,7 @@
   bash,
 }:
 
-stdenv.mkDerivation {
-  pname = "btrshot";
-  version = "0.1.0";
-
-  src = ./.;
-
-  nativeBuildInputs = [ makeWrapper ];
-
+let
   runtimeDeps = [
     btrfs-progs
     gnupg
@@ -38,6 +31,14 @@ stdenv.mkDerivation {
     rsync
     bash
   ];
+in
+stdenv.mkDerivation {
+  pname = "btrshot";
+  version = "0.1.0";
+
+  src = ./.;
+
+  nativeBuildInputs = [ makeWrapper ];
 
   postPatch = ''
     patchShebangs btrshot.sh btrshot-restore.sh

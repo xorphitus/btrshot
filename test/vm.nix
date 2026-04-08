@@ -1,26 +1,23 @@
-{ pkgs, lib, projectSrc, ... }:
+{ pkgs, projectSrc, btrshotPackage, ... }:
 
+let
+  pythonEnv = pkgs.python3.withPackages (ps: [
+    ps.pytest
+    ps.moto
+    ps.flask
+    ps.flask-cors
+    ps.werkzeug
+  ]);
+in
 {
-  # --------------------------------------------------------------------------
-  # VM hardware
-  # --------------------------------------------------------------------------
+  boot.supportedFilesystems = [ "btrfs" ];
+
   virtualisation.graphics = false;
-  systemd.services."serial-getty@ttyS0".enable = false;
-  systemd.settings.Manager.ShowStatus = "no";
   virtualisation.memorySize = 512;
-  # Two empty 64 MB disks → /dev/vdb and /dev/vdc
   virtualisation.emptyDiskImages = [ 64 64 ];
 
-  # 9p shared directory for passing results back to the host
-  virtualisation.sharedDirectories.results = {
-    source = "/tmp/btrshot-test-results";
-    target = "/results";
-  };
-
-  # --------------------------------------------------------------------------
-  # Packages available inside the VM
-  # --------------------------------------------------------------------------
   environment.systemPackages = with pkgs; [
+    btrshotPackage
     btrfs-progs
     gnupg
     awscli2
@@ -35,55 +32,21 @@
     gawk
     kmod
     rsync
-    (python3.withPackages (ps: [ ps.pytest ]))
+    pythonEnv
   ];
 
-  # --------------------------------------------------------------------------
-  # Project source inside the VM
-  # --------------------------------------------------------------------------
   environment.etc."btrshot".source = projectSrc;
 
-  # --------------------------------------------------------------------------
-  # Auto-run tests on boot, then power off
-  # --------------------------------------------------------------------------
-  systemd.services.btrshot-test = {
-    description = "btrshot integration test suite";
+  systemd.services.s3-mock = {
+    description = "Local S3-compatible object storage for btrshot tests";
     wantedBy = [ "multi-user.target" ];
-    after = [ "network-online.target" ];
-    wants = [ "network-online.target" ];
-    path = with pkgs; [
-      btrfs-progs
-      gnupg
-      awscli2
-      util-linux
-      coreutils
-      bash
-      gnutar
-      gzip
-      findutils
-      gnugrep
-      gnused
-      gawk
-      kmod
-      rsync
-      (python3.withPackages (ps: [ ps.pytest ]))
-    ];
+    after = [ "network.target" ];
     serviceConfig = {
-      Type = "oneshot";
-      ExecStart = "${pkgs.bash}/bin/bash /etc/btrshot/test/vm-entrypoint.sh";
-      StandardOutput = "journal+console";
-      StandardError = "journal+console";
+      Type = "simple";
+      ExecStart = "${pythonEnv}/bin/moto_server -H 127.0.0.1 -p 9000";
+      Restart = "on-failure";
     };
   };
 
-  # Power off after the test service finishes (success or failure)
-  systemd.services.btrshot-test-shutdown = {
-    description = "Shut down VM after tests";
-    wantedBy = [ "multi-user.target" ];
-    after = [ "btrshot-test.service" ];
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = "${pkgs.systemd}/bin/systemctl poweroff";
-    };
-  };
+  system.stateVersion = "24.11";
 }

@@ -229,9 +229,10 @@ def runner():
         check=True,
     )
 
-    # 3. Wait for floci (S3) and create bucket
+    # 3. Wait for the local S3-compatible service and create the test bucket
     os.environ.setdefault("AWS_ACCESS_KEY_ID", "test")
     os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "test")
+    os.environ.setdefault("AWS_ENDPOINT_URL", "http://127.0.0.1:9000")
 
     for _ in range(30):
         result = subprocess.run(

@@ -35,6 +35,12 @@ This sets up the systemd service, timer, and config file automatically. See `mod
 ### Standalone (without the module)
 
 ```sh
+nix profile install github:xorphitus/btrshot
+```
+
+You can also build the package explicitly:
+
+```sh
 nix build github:xorphitus/btrshot#btrshot
 ```
 
@@ -42,10 +48,12 @@ This produces `result/bin/btrshot` and `result/bin/btrshot-restore` with all run
 
 ## Running Tests
 
-### Default (NixOS QEMU VM)
+### Default (sandboxed NixOS test)
 
-Requires: `nix` (with flakes enabled), `docker`
+Requires: `nix` with flakes enabled.
 
 ```sh
 test/run.sh
 ```
+
+This runs `.#checks.<system>.integration`, which executes the integration suite inside a NixOS VM with a local S3-compatible server. No host Docker setup is required.

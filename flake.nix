@@ -7,38 +7,40 @@
 
   outputs = { self, nixpkgs }:
     let
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-
-      btrshot = pkgs.callPackage ./package.nix { };
-
-      testVm = nixpkgs.lib.nixosSystem {
-        inherit system;
-        specialArgs = {
-          projectSrc = self;
-        };
-        modules = [
-          ./test/vm.nix
-          ({ modulesPath, ... }: {
-            imports = [ "${modulesPath}/virtualisation/qemu-vm.nix" ];
-            # Minimal system config
-            boot.loader.grub.enable = false;
-            fileSystems."/" = {
-              device = "/dev/disk/by-label/nixos";
-              fsType = "ext4";
-            };
-            system.stateVersion = "24.11";
-            networking.hostName = "btrshot-test";
-            users.users.root.initialPassword = "test";
-          })
-        ];
-      };
+      lib = nixpkgs.lib;
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
+      forAllSystems = lib.genAttrs supportedSystems;
+      mkPkgs = system: import nixpkgs { inherit system; };
     in
     {
-      packages.${system} = {
-        inherit btrshot;
-        test-vm = testVm.config.system.build.vm;
-        default = btrshot;
+      packages = forAllSystems (system:
+        let
+          pkgs = mkPkgs system;
+          btrshot = pkgs.callPackage ./package.nix { };
+        in
+        {
+          inherit btrshot;
+          default = btrshot;
+        });
+
+      checks = forAllSystems (system:
+        let
+          pkgs = mkPkgs system;
+          btrshot = self.packages.${system}.btrshot;
+        in
+        {
+          integration = import ./test/integration.nix {
+            inherit pkgs;
+            btrshotPackage = btrshot;
+            projectSrc = self;
+          };
+        });
+
+      overlays.default = final: prev: {
+        btrshot = final.callPackage ./package.nix { };
       };
 
       nixosModules.default = { lib, pkgs, ... }: {
